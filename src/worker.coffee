@@ -49,17 +49,22 @@ class Worker
         debug 'message received:', message
         job = @_amqpToJobManager message
         debug 'job:', job
+
         @jobManager.do 'request', 'response', job, (error, response) =>
           debug 'response received:', response
+
           options =
             header:
-              subject: @message.properties.replyTo
+              subject: message.properties.replyTo
             properties:
-              correlationId: @message.properties.correlationId
+              correlationId: message.properties.correlationId
             applicationProperties:
-              code: response.code
+              code: response.code || 0
 
+          debug 'sender options', options
           @sender.send response.rawData, options
+          console.log "SENT A RESPONSEEEEEE"
+
 
   stop: (callback) =>
     @client.disconnect()

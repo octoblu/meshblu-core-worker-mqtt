@@ -36,10 +36,21 @@ describe 'whoami', ->
       @jobManager.getRequest ['request'], (error, @jobManagerRequest) =>
         return callback error if error?
         return callback new Error('Request timeout') unless @jobManagerRequest?
-        callback()
+        console.log {@jobManagerRequest}
+
+        responseOptions =
+          metadata:
+            responseId: @jobManagerRequest.metadata.responseId
+          data: { whoami:'somebody' }
+          code: 200
+
+        @jobManager.createResponse 'response', responseOptions, (error) =>
+          console.log 'INRESPONSE CALLBACK', error
+          callback()
 
     @asyncClientWhoAmi = (callback) =>
       @client.whoami (error, @data) =>
+        console.log 'IN WHOAMI CALLBACK', error
         callback(error)
 
     async.parallel [ @asyncJobManagerGetRequest, @asyncClientWhoAmi ], done
