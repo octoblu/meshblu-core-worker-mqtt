@@ -36,7 +36,6 @@ describe 'whoami', ->
       @jobManager.getRequest ['request'], (error, @jobManagerRequest) =>
         return callback error if error?
         return callback new Error('Request timeout') unless @jobManagerRequest?
-        console.log {@jobManagerRequest}
 
         responseOptions =
           metadata:
@@ -44,37 +43,17 @@ describe 'whoami', ->
           data: { whoami:'somebody' }
           code: 200
 
-        @jobManager.createResponse 'response', responseOptions, (error) =>
-          console.log 'INRESPONSE CALLBACK', error
-          callback()
+        @jobManager.createResponse 'response', responseOptions, callback
 
     @asyncClientWhoAmi = (callback) =>
       @client.whoami (error, @data) =>
-        console.log 'IN WHOAMI CALLBACK', error
         callback(error)
 
-    async.parallel [ @asyncJobManagerGetRequest, @asyncClientWhoAmi ], done
+    async.parallel [ @asyncJobManagerGetRequest, @asyncClientWhoAmi ], =>
+      done()
 
-  it 'should create a @jobManagerRequest', (done) ->
+  it 'should create a @jobManagerRequest', ->
     expect(@jobManagerRequest.metadata.jobType).to.deep.equal 'GetDevice'
 
-  # describe 'when the dispatcher responds', ->
-  #   beforeEach (done) ->
-  #     @connection.once 'whoami', (@response) => done()
-  #
-  #     @jobManager.getRequest ['request'], (error,request) =>
-  #       return done error if error?
-  #       return done new Error('Request timeout') unless request?
-  #
-  #       response =
-  #         metadata:
-  #           responseId: request.metadata.responseId
-  #           code: 200
-  #         data:
-  #           uuid: 'OHM MY!! WATT HAPPENED?? VOLTS'
-  #       @jobManager.createResponse 'response', response, (error) =>
-  #         return done error if error?
-  #
-  #
-  # it 'should give us a device', ->
-  #   expect(@data).to.exist
+  it 'should give us a device', ->
+    expect(@data).to.exist

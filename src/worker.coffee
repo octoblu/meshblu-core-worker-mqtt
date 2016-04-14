@@ -54,17 +54,14 @@ class Worker
           debug 'response received:', response
 
           options =
-            header:
-              subject: message.properties.replyTo
             properties:
               correlationId: message.properties.correlationId
+              subject: message.properties.replyTo
             applicationProperties:
               code: response.code || 0
 
           debug 'sender options', options
           @sender.send response.rawData, options
-          console.log "SENT A RESPONSEEEEEE"
-
 
   stop: (callback) =>
     @client.disconnect()
