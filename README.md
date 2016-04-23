@@ -1,5 +1,5 @@
-# meshblu-core-worker-amqp
-Meshblu AMQP worker
+# meshblu-core-worker-mqtt
+Meshblu mqtt worker
 
 [![Build Status](https://travis-ci.org/octoblu/.svg?branch=master)](https://travis-ci.org/octoblu/)
 [![Code Climate](https://codeclimate.com/github/octoblu//badges/gpa.svg)](https://codeclimate.com/github/octoblu/)

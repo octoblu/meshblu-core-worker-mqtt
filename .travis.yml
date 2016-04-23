@@ -10,7 +10,7 @@ addons:
     repo_token: 06a03f1f5a76807b5b26d3e34278f4fe340b3e056c78322f787d6761f181b540
 before_script:
 - npm install -g codeclimate-test-reporter
-- sudo rabbitmq-plugins enable rabbitmq_amqp1_0
+- sudo rabbitmq-plugins enable rabbitmq_mqtt1_0
 - sudo rabbitmqctl add_user meshblu judgementday
 - sudo rabbitmqctl set_permissions meshblu ".*" ".*" ".*"
 - sudo rabbitmqctl add_user some-uuid some-token

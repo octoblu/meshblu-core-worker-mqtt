@@ -1,5 +1,5 @@
 Worker      = require '../src/worker'
-MeshbluAmqp = require 'meshblu-amqp'
+Meshblumqtt = require 'meshblu-mqtt'
 RedisNS     = require '@octoblu/redis-ns'
 redis       = require 'ioredis'
 JobManager  = require 'meshblu-core-job-manager'
@@ -14,7 +14,7 @@ describe 'whoami', ->
 
   beforeEach ->
     @worker = new Worker
-      amqpUri: 'amqp://meshblu:judgementday@127.0.0.1'
+      mqttUri: 'mqtt://meshblu:judgementday@127.0.0.1'
       jobTimeoutSeconds: 1
       jobLogRedisUri: 'redis://localhost:6379'
       jobLogQueue: 'sample-rate:0.00'
@@ -27,7 +27,7 @@ describe 'whoami', ->
       throw error if error?
 
   beforeEach (done) ->
-    @client = new MeshbluAmqp uuid: 'some-uuid', token: 'some-token', hostname: 'localhost'
+    @client = new Meshblumqtt uuid: 'some-uuid', token: 'some-token', hostname: 'localhost'
     @client.connect done
 
   beforeEach (done) ->
