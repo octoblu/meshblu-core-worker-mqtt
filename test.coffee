@@ -1,7 +1,7 @@
 #http://blog.airasoul.io/the-internet-of-things-with-rabbitmq-node-js-mqtt-and-amqp/
 
 amqp = require 'amqp'
-url = 'amqp://meshblu:some-random-development-password@octoblu.dev:5672/%2Fmqtt'
+url = 'amqp://meshblu:some-random-development-password@octoblu.dev:5672/mqtt'
 connection = amqp.createConnection({ url: url }, defaultExchangeName: 'amq.topic')
 connection.on 'ready', ->
   console.log 'ready'
@@ -14,8 +14,15 @@ connection.on 'ready', ->
     q.subscribe {
       ack: true
       prefetchCount: 1
-    }, (message) ->
+    }, (message, headers, deliveryInfo, messageObject) ->
       console.log 'received message', message.data.toString()
-      # console.log arguments.length
-      # console.log arguments
+      msg = JSON.parse message.data
+      console.log deliveryInfo.consumerTag
+      replyTo = 'mqtt-subscription-'+msg.replyTo+'qos1'
+      console.log replyTo
+      connection.publish(replyTo, {
+        topic: deliveryInfo.routingKey
+        callbackId: msg.callbackId
+        data: {'hello':'world'}
+      })
       q.shift()
