@@ -1,145 +1,157 @@
-debug                 = require('debug')('meshblu-core-worker-mqtt:worker')
-RedisPooledJobManager = require 'meshblu-core-redis-pooled-job-manager'
-uuid                  = require 'uuid'
-_                     = require 'lodash'
+MultiHydrantFactory = require 'meshblu-core-manager-hydrant/multi'
+UuidAliasResolver   = require 'meshblu-uuid-alias-resolver'
+JobManager          = require 'meshblu-core-redis-pooled-job-manager'
+RedisNS             = require '@octoblu/redis-ns'
+redis               = require 'ioredis'
+debug               = require('debug')('meshblu-core-worker-mqtt:worker')
+async               = require 'async'
+uuid                = require 'uuid'
+amqp                = require 'amqp'
+_                   = require 'lodash'
 
 class Worker
   constructor: (options={}, dependencies={})->
-    # super wildcard: true
-    @queueName = "#{options.uuid}.#{uuid.v4()}"
-    # @firehoseQueueName = "#{options.uuid}.firehose.#{uuid.v4()}"
-    @mqtt = dependencies.mqtt ? require 'mqtt'
-    {uuid,token} = options
-    console.log options
-    console.log {uuid,token}
-    defaults =
-      keepalive: 10
-      protocolId: 'MQIsdp'
-      protocolVersion: 3
-      qos: 0
-      username: options.uuid
-      password: options.token
-      reconnectPeriod: 5000
-      clientId: @queueName
-    @options = _.defaults options, defaults
-    @messageCallbacks = {}
+    { @jobTimeoutSeconds, @jobLogQueue, @jobLogRedisUri, @jobLogSampleRate, @maxConnections,
+      @redisUri, @namespace, @hydrantNamespace, @aliasServerUri } = options
+    @redisClient = new RedisNS @namespace, redis.createClient(@redisUri)
+    @jobManager = new JobManager {
+      jobLogIndexPrefix: 'metric:meshblu-core-worker-amqp'
+      jobLogType: 'meshblu-core-worker-amqp:request'
+      @jobTimeoutSeconds
+      @jobLogQueue
+      @jobLogRedisUri
+      @jobLogSampleRate
+      @maxConnections
+      @redisUri
+      @namespace
+    }
 
-    @JOB_MAP =
-      'meshblu.generateAndStoreToken': @handleEvent
-      'meshblu.getPublicKey':          @handleEvent
-      'meshblu.message':               @handleEvent
-      'meshblu.resetToken':            @handleEvent
-      'meshblu.update':                @handleEvent
-      'meshblu.whoami':                @handleEvent
+    console.log {@hydrantNamespace, @redisUri}
+
+    # @hydrant.client.once 'ready', =>
+    #   debug 'hydrantClient is ready'
+
+    # uuidAliasClient = new RedisNS 'uuid-alias', redis.createClient(@redisUri)
+    # uuidAliasResolver = new UuidAliasResolver
+    #   cache: uuidAliasClient
+    #   aliasServerUri: @aliasServerUri
+    debug 'constructed!'
 
   connect: (callback=->) =>
-    uri = @_buildUri()
+    debug 'connecting'
 
-    @client = @mqtt.connect uri, @options
-    @client.once 'connect', =>
-      response = _.pick @options, 'uuid', 'token'
-      # @client.subscribe @firehoseQueueName, qos: @options.qos
-      console.log _.keys @JOB_MAP
-      _.each _.keys(@JOB_MAP), (job) =>
-        console.log "subscribing to #{job}"
-        @client.subscribe job, qos: @options.qos
-      callback response
+    url = 'amqp://meshblu:some-random-development-password@octoblu.dev:5672/mqtt'
+    @connection = amqp.createConnection({url}, defaultExchangeName: 'amq.topic')
+    @connection.on 'ready', =>
+      console.log 'amqp ready'
+      @connection.queue 'meshblu.queue', {
+        durable: true
+        autoDelete: false
+      }, (q) =>
+        uuidAliasResolver = { resolve: (uuid, callback) => callback null, uuid }
+        hydrantClient = new RedisNS @hydrantNamespace, redis.createClient(@redisUri)
+        @hydrant = new MultiHydrantFactory {client: hydrantClient, uuidAliasResolver}
 
-    @client.on 'message', @_messageHandler
+        @hydrant.on 'message', @_onHydrantMessage
+        @hydrant.connect (error) =>
+          debug 'hydrant connected!'
+          debug {error}
+          return callback(error) if error?
+          @_bindQueue q, callback
 
-    # _.each PROXY_EVENTS, (event) => @_proxy event
+    @meshbluMethods =
+      'meshblu.request'          : @_meshbluRequest
+      'meshblu.reply-to'         : @_meshbluReplyTo
+      'meshblu.cache-auth'       : @_meshbluCacheAuth
+      'meshblu.firehose.request' : @_meshbluFirehoseRequest
+
+  _bindQueue: (q, callback=->) =>
+    console.log 'queue connected'
+    q.bind 'meshblu.request'
+    q.bind 'meshblu.reply-to'
+    q.bind 'meshblu.cache-auth'
+    q.bind 'meshblu.firehose.request'
+    callback()
+
+    q.subscribe {
+      ack: true
+      prefetchCount: 1
+    }, (message, headers, deliveryInfo, messageObject) =>
+      console.log 'received message', message.data.toString()
+      console.log {deliveryInfo}
+      msg = JSON.parse message.data
+      console.log deliveryInfo?.routingKey
+      @meshbluMethods[deliveryInfo?.routingKey]?(msg, deliveryInfo)
+      q.shift()
+
+  _meshbluRequest: (msg, deliveryInfo) =>
+    debug 'processing meshblu.request', msg
+    jobs = []
+    jobs.push @_fetchAuth unless msg?.job?.metadata?.auth?
+    jobs.push @_fetchReplyTo unless msg?.jobInfo?.replyTo?
+    jobs.push @_jobManagerDo
+    async.applyEachSeries jobs, msg, deliveryInfo, (error, info) =>
+      debug 'applied eachSeries'
+      debug arguments
+    # return @_jobManagerDo(msg) if msg.job.metadata?.auth?
+
+  _fetchAuth: (msg, deliveryInfo, callback=->) =>
+    debug 'fetching auth'
+    @redisClient.hget deliveryInfo.consumerTag, 'auth', (error, auth) =>
+      debug {error, auth}
+      try
+        auth = JSON.parse auth
+      catch error
+        auth = null
+      msg.job.metadata.auth = auth
+      callback error
+
+  _fetchReplyTo: (msg, deliveryInfo, callback=->) =>
+    debug 'fetching replyTo'
+    @redisClient.hget deliveryInfo.consumerTag, 'replyTo', (error, replyTo) =>
+      debug {error, replyTo}
+      try
+        replyTo = JSON.parse replyTo
+      catch error
+        replyTo = null
+      msg.jobInfo.replyTo = replyTo
+      callback error
+
+  _jobManagerDo: (msg) =>
+    debug 'doing request...', msg
+    @jobManager.do 'request', 'response', msg.job, (error, response) =>
+      debug 'response received:', response
+      callbackId = msg.jobInfo.callbackId
+      data = response.rawData
+      if response.metadata.code >= 300
+        data = response.metadata.status
+        topic = 'error'
+      replyTo = msg.jobInfo.replyTo
+      reply = {topic, data, callbackId}
+      debug {replyTo, reply}
+      @connection.publish(replyTo, reply) if replyTo?
+
+  _meshbluCacheAuth: (msg, deliveryInfo) =>
+    debug 'caching ', msg.auth
+    @redisClient.hset deliveryInfo.consumerTag, 'auth', JSON.stringify(msg.auth)
+
+  _meshbluReplyTo: (msg, deliveryInfo) =>
+    debug 'caching ', msg.replyTo
+    @redisClient.hset deliveryInfo.consumerTag, 'replyTo', JSON.stringify(msg.replyTo)
+
+  _meshbluFirehoseRequest: (msg) =>
+    debug 'meshblu.firehose.request!'
+    {uuid} = msg
+    @hydrant.subscribe {uuid}, (error) =>
+      debug 'firehose', {error}
+
+  _onHydrantMessage: (uuid, message)=>
+    debug onHydrantMessage: message
+    message.topic = 'meshblu.firehose.request'
+    @connection.publish("#{uuid}.firehose", message)
 
   run: (callback=->) =>
+    debug 'inrun!'
     @connect()
-    #callback
-
-  publish: (topic, data, callback=->) =>
-    throw new Error 'No Active Connection' unless @client?
-
-    if !data
-      rawData = null
-    else if _.isString data
-      rawData = data
-    else
-      data.callbackId = uuid.v4();
-      @messageCallbacks[data.callbackId] = callback;
-      rawData = JSON.stringify(data)
-    debug 'publish', topic, rawData
-    @client.publish 'meshblu.'+topic, rawData
-
-  # API Functions
-  message: (params, callback=->) =>
-    @publish 'message', params, callback
-
-  subscribe: (params, callback=->) =>
-    @client.subscribe params
-
-  unsubscribe: (params, callback=->) =>
-    @client.unsubscribe params
-
-  update: (data, callback=->) =>
-    @publish 'update', data, callback
-
-  resetToken: (data, callback=->) =>
-    @publish 'resetToken', data, callback
-
-  getPublicKey: (data, callback=->) =>
-    @publish 'getPublicKey', data, callback
-
-  generateAndStoreToken: (data, callback=->) =>
-    @publish 'generateAndStoreToken', data, callback
-
-  whoami: (callback=->) =>
-    @publish 'whoami', {}, callback
-
-  # Private Functions
-  _buildUri: =>
-    defaults =
-      protocol: 'mqtt'
-      hostname: 'meshblu.octoblu.com'
-      port: 1883
-    uriOptions = _.defaults {}, @options, defaults
-    uri = uriOptions.protocol + ':' + uriOptions.hostname + ':' + uriOptions.port
-    # uri = url.format uriOptions
-    console.log uri
-    return uri
-
-  _messageHandler: (uuid, message, packet) =>
-    packet.payload = packet.payload.toString()
-    debug {uuid, message: message.toString(), packet}
-
-    message = message.toString()
-    try
-      message = JSON.parse message
-    catch error
-      debug 'unable to parse message', message
-
-    debug "sending a response to #{message.queueName}"
-    return @client.publish message.queueName, JSON.stringify(hello: 'world')
-
-    debug '_messageHandler', message.topic, message.data
-    return if @handleCallbackResponse message
-    # return @emit message.topic, message.data
-
-  handleCallbackResponse: (message) =>
-    id = message._request?.callbackId
-    return false unless id?
-    callback = @messageCallbacks[id] ? ->
-    callback message.data if message.topic == 'error'
-    callback null, message.data if message.topic != 'error'
-    delete @messageCallbacks[id]
-    return true
-
-  _proxy: (event) =>
-    @client.on event, =>
-      debug 'proxy ' + event, _.first arguments
-      # @emit event, arguments...
-
-  _uuidOrObject: (data) =>
-    return uuid: data if _.isString data
-    return data
-
-  handleEvent: (packet) =>
-    console.log packet
 
 module.exports = Worker
