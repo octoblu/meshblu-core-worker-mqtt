@@ -30,3 +30,6 @@ after_success:
 branches:
   only:
   - "/^v[0-9]/"
+branches:
+  only:
+  - "/^v[0-9]/"
