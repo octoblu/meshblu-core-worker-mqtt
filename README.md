@@ -6,3 +6,5 @@ Meshblu mqtt worker
 [![Test Coverage](https://codeclimate.com/github/octoblu//badges/coverage.svg)](https://codeclimate.com/github/octoblu/)
 [![npm version](https://badge.fury.io/js/.svg)](http://badge.fury.io/js/)
 [![Gitter](https://badges.gitter.im/octoblu/help.svg)](https://gitter.im/octoblu/help)
+
+A BUNCH OF OTHER STUFF
